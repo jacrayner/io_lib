@@ -422,6 +422,7 @@ static void bam_file_init(bam_file_t *b) {
     b->bgbuf_p = b->bgbuf;
     b->bgbuf_sz = 0;
     b->idx_fn = NULL;
+    b->first_block = 1;
 }
 
 /*! Opens a SAM or BAM file.
@@ -2811,7 +2812,7 @@ unsigned char *append_uint(unsigned char *cp, uint32_t i) {
  * Returns 0 on success;
  *        -1 on error
  */
-static int bgzf_encode(int level,
+static int bgzf_encode(int level,int strategy,
 		       const void *buf, uint32_t in_sz,
 		       void *out, uint32_t *out_sz) {
     unsigned char *blk = out;
@@ -2837,7 +2838,7 @@ static int bgzf_encode(int level,
     s.data_type = Z_BINARY;
 
     /* Compress it */
-    err = deflateInit2(&s, level, Z_DEFLATED, -15, 8, Z_DEFAULT_STRATEGY);
+    err = deflateInit2(&s, level, Z_DEFLATED, -15, 8, strategy);
     //err = deflateInit2(&s, level, Z_DEFLATED, -15, 8, Z_FILTERED);
 
     if (err != Z_OK) {
@@ -2908,7 +2909,7 @@ static int bgzf_encode(int level,
 
 static int bgzf_block_write(bam_file_t *bf, int level,
 			    const void *buf, size_t count) {
-    if (!bf->idx)
+    if (!bf->idx) 
 	return BGZF_WRITE(bf, level, buf, count);
 
     const uint8_t *input = (const uint8_t*)buf;
@@ -2934,6 +2935,12 @@ static int bgzf_block_write(bam_file_t *bf, int level,
 	remaining -= copy_length;
 
 	if (bf->bgbuf_sz == ublock_size) {
+	    if (bf->first_block) {
+	      for(;;) {
+		 bf->first_block = 0;
+		 
+	      }
+	    }
 	    BGZF_WRITE(bf, level, bf->bgbuf_p, ublock_size);
 	    bf->bgbuf_sz=0;
 	    bf->current_block++;  // track the blocks
@@ -2944,11 +2951,25 @@ static int bgzf_block_write(bam_file_t *bf, int level,
 }
 
 
+static int bgzf_calc_size(bam_file_t *bf, int level, const void *buf, size_t count) {
+    unsigned char blk[Z_BUFF_SIZE+4];
+    uint32_t len;
+
+    if (0 != bgzf_encode(level, strategy, buf, count, blk, &len)) 
+	return -1;
+
+    if (len != fwrite(blk, 1, len, bf->fp))
+	return -1;
+
+    return 0;
+}
+
+
 static int bgzf_write(bam_file_t *bf, int level, const void *buf, size_t count) {
     unsigned char blk[Z_BUFF_SIZE+4];
     uint32_t len;
 
-    if (0 != bgzf_encode(level, buf, count, blk, &len)) 
+    if (0 != bgzf_encode(level, strategy, buf, count, blk, &len)) 
 	return -1;
 
     if (len != fwrite(blk, 1, len, bf->fp))
@@ -2959,6 +2980,7 @@ static int bgzf_write(bam_file_t *bf, int level, const void *buf, size_t count) 
 
 typedef struct {
     int level;
+    int strategy;
     unsigned char in[Z_BUFF_SIZE];
     unsigned char out[Z_BUFF_SIZE];
     uint32_t in_sz, out_sz;
@@ -2967,7 +2989,7 @@ typedef struct {
 void *bgzf_encode_thread(void *arg) {
     bgzf_encode_job *j = (bgzf_encode_job *)arg;
 
-    bgzf_encode(j->level, j->in, j->in_sz, j->out, &j->out_sz);
+    bgzf_encode(j->level, j->strategy, j->in, j->in_sz, j->out, &j->out_sz);
     return arg;
 }
 
@@ -2981,6 +3003,7 @@ static int bgzf_write_mt(bam_file_t *bf, int level, const void *buf,
 
     j = malloc(sizeof(*j));
     j->level = level;
+    j->strategy = strategy;
     memcpy(j->in, buf, count);
     j->in_sz = count;
     t_pool_dispatch(bf->pool, bf->equeue, bgzf_encode_thread, j);

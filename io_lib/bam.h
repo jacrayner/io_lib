@@ -200,6 +200,8 @@ typedef struct {
     int ignore_chksum;
 
     /* Used when gzi files are supplied. */
+    char first_block;
+    int strategy;
     gzi *idx;
     char *idx_fn;
     uint64_t current_block;
@@ -210,7 +212,7 @@ typedef struct {
 
 /* BAM flags */
 #define BAM_FPAIRED           1
-#define BAM_FPROPER_PAIR      2
+#define BAM_FPROPER_PAIR      2   
 #define BAM_FUNMAP            4
 #define BAM_FMUNMAP           8
 #define BAM_FREVERSE         16
